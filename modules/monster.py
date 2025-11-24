@@ -8,7 +8,7 @@ import pygame
 TILE_SIZE = 32
 MAX_CHASE_TILES = 10           # 플레이어와 거리가 이 이상이면 chase 해제
 WAIT_DURATION = 1.5            # 방 입구 등에서 대기 시간 (초)
-SEARCH_DURATION = 3.0          # SEARCH 유지 시간 (초)
+SEARCH_DURATION = 10.0         # SEARCH 유지 시간 (초)
 
 class Monster(pygame.sprite.Sprite):
     def __init__(self, speed, map_manager):
@@ -28,6 +28,9 @@ class Monster(pygame.sprite.Sprite):
         self.lost_timer = 0       # 플레이어를 시야에서 놓친 시간
         self.search_timer = 0     # SEARCH 상태 유지 시간
         self.wait_timer = 0       # WAIT 상태 유지 시간
+
+        self.search_direction = None
+        self.search_direction_timer = 0
 
         # 크기
         self.width = TILE_SIZE    # 가로
@@ -55,6 +58,7 @@ class Monster(pygame.sprite.Sprite):
         
         # 외부 시스템
         self.map_manager = map_manager   # 맵
+        self.current_map = "map1"        # 초기 맵 이름 (지금은 임시)
 
     # spawn / despawn
     def spawn(self, tile_pos):
@@ -97,8 +101,19 @@ class Monster(pygame.sprite.Sprite):
             self.target_tile = (player.tile_x, player.tile_y)
             return
         
-        # 그냥 배회
-        self.random_move(dt)
+        # 목표가 없으면 새 랜덤 좌표 생성
+        if self.target_tile is None:
+            self.target_tile = self.get_random_walkable_tile(max_x=100, max_y=100)
+
+        # 목표에 도달하면 target을 None으로
+        if self.tile_x == self.target_tile[0] and self.tile_y == self.target_tile[1]:
+            self.target_tile = None
+
+        # 랜덤 좌표로 이동
+        if self.target_tile is not None:
+            target_x = self.target_tile[0] * TILE_SIZE + TILE_SIZE // 2
+            target_y = self.target_tile[1] * TILE_SIZE + TILE_SIZE // 2
+            self.move_towards((target_x, target_y), dt)
 
     # chase state
     def update_chase(self, player, dt):
@@ -148,10 +163,10 @@ class Monster(pygame.sprite.Sprite):
         self.wait_timer += dt
         if self.wait_timer >= WAIT_DURATION:
             # 방 이동 (맵 변경)
-            new_tile_x, new_tile_y = self.map_manager.move_to_room((self.tile_x, self.tile_y))
+            new_map, new_tile_x, new_tile_y = self.map_manager.move_to_room((self.tile_x, self.tile_y), self.current_map)
 
             # 새로운 좌표 받기
-            self.tile_x, self.tile_y = new_tile_x, new_tile_y
+            self.current_map, self.tile_x, self.tile_y = new_map, new_tile_x, new_tile_y
             self.rect.center = (self.tile_x * TILE_SIZE + TILE_SIZE//2,
                                 self.tile_y * TILE_SIZE + TILE_SIZE//2)
         
@@ -169,6 +184,7 @@ class Monster(pygame.sprite.Sprite):
             return
         
         tx, ty = target
+        
         cx, cy = self.rect.center
         dx = tx - cx
         dy = ty - cy
@@ -186,37 +202,55 @@ class Monster(pygame.sprite.Sprite):
         new_tile_y = int(new_cy / TILE_SIZE)             # 이동 후 y 타일 좌표
         
         # 충돌 검사 후 이동
-        if self.map_manager.is_walkable(new_tile_x, self.tile_y):      # x축 이동 검사
+        if self.map_manager.is_walkable(new_tile_x, self.tile_y, self.current_map):      # x축 이동 검사
             self.rect.centerx = new_cx
             self.tile_x = new_tile_x
-        if self.map_manager.is_walkable(self.tile_x, new_tile_y):      # y축 이동 검사
+        if self.map_manager.is_walkable(self.tile_x, new_tile_y, self.current_map):      # y축 이동 검사
             self.rect.centery = new_cy
             self.tile_y = new_tile_y
 
-    # 랜덤 배회
+    # 랜덤 배회 (Search 용)
     def random_move(self, dt):
         # 이동 전에 현재 위치가 문이면 WAIT
         if self.is_entrance():
             self.enter_wait_mode()
             return
         
-        # 4방향 제한
-        angle = random.choice([0, math.pi/2, math.pi, 3*math.pi/2])
-        dx = math.cos(angle) * self.speed * dt
-        dy = math.sin(angle) * self.speed * dt
+        # 찾는 방향이 None 이거나 정해진 시간 만큼 일정 방향 동안 찾았을 경우
+        if self.search_direction is None or self.search_direction_timer <= 0:
+             # 방향 재설정 및 정해진 시간 재설정 (4방향)
+            self.search_direction = random.choice([0, math.pi/2, math.pi, 3*math.pi/2])
+            self.search_direction_timer = random.uniform(3.0, 4.0)
+        
+        dx = math.cos(self.search_direction) * self.speed * dt
+        dy = math.sin(self.search_direction) * self.speed * dt
 
         new_cx = self.rect.centerx + dx                      # 이동 후 x 픽셀 좌표
         new_cy = self.rect.centery + dy                      # 이동 후 y 픽셀 좌표
         new_tile_x = int(new_cx / TILE_SIZE)                 # 이동 후 x 타일 좌표
         new_tile_y = int(new_cy / TILE_SIZE)                 # 이동 후 y 타일 좌표
 
-        # 충돌 검사 후 이동
-        if self.map_manager.is_walkable(new_tile_x, self.tile_y):
+        # 이동 가능 여부 (문, 벽 있으면 이동 불가)
+        walkable_x = self.map_manager.is_walkable(new_tile_x, self.tile_y, self.current_map) and not self.is_entrance(new_tile_x, self.tile_y)
+        walkable_y = self.map_manager.is_walkable(self.tile_x, new_tile_y, self.current_map) and not self.is_entrance(self.tile_x, new_tile_y)
+
+        # 실제 이동
+        moved = False
+        if walkable_x:
             self.rect.centerx = new_cx
             self.tile_x = new_tile_x
-        if self.map_manager.is_walkable(self.tile_x, new_tile_y):
+            moved = True
+        if walkable_y:
             self.rect.centery = new_cy
             self.tile_y = new_tile_y
+            moved = True
+
+        # 막혀서 움직이지 못하는 경우라면 다음 사이클에 방향 재설정
+        if not moved:
+            self.search_direction_timer = 0
+
+        # 타이머 감소
+        self.search_direction_timer -= dt
 
     # helper
     # 사정거리 체크
@@ -239,11 +273,19 @@ class Monster(pygame.sprite.Sprite):
         self.wait_timer = 0
 
     # 방 입구 체크
-    def is_entrance(self):
-        return (self.tile_x, self.tile_y) in self.map_manager.room_entrances
+    def is_entrance(self, x=None, y=None):
+        check_x = self.tile_x if x is None else x
+        check_y = self.tile_y if y is None else y
+        return (check_x, check_y) in self.map_manager.room_entrances[self.current_map]
     
     # 플레이어와 충돌 체크
     def is_colliding(self, player):
-        dx = abs(self.rect.centerx - player.rect.centerx)
-        dy = abs(self.rect.centery - player.rect.centery)
-        return dx < (self.width/2 + player.width/2) and dy < (self.height/2 + player.height/2)
+        return self.rect.colliderect(player.rect)
+    
+    # patrol 모드에서 랜덤 target 타일 좌표 생성
+    def get_random_walkable_tile(self, max_x=100, max_y=100):
+        while True:
+            x = random.randint(0, max_x-1)
+            y = random.randint(0, max_y-1)
+            if self.map_manager.is_walkable(x, y, self.current_map) and (x, y) not in self.map_manager.room_entrances[self.current_map]:
+                return x, y
