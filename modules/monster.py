@@ -58,7 +58,7 @@ class Monster(pygame.sprite.Sprite):
         
         # 외부 시스템
         self.map_manager = map_manager   # 맵
-        self.current_map = "map1"        # 초기 맵 이름 (지금은 임시)
+        self.current_map = "HALL"        # 초기 맵 이름 (지금은 임시)
 
     # spawn / despawn
     def spawn(self, tile_pos):
@@ -184,7 +184,7 @@ class Monster(pygame.sprite.Sprite):
             return
         
         tx, ty = target
-        
+
         cx, cy = self.rect.center
         dx = tx - cx
         dy = ty - cy
