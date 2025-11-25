@@ -43,11 +43,11 @@ HALL_MAP = [
     "#########...###############.....###########......++.....##################...++.##########",
     "#########....#########....####################..+++..###############....####.++.##########",
     "####.....+++...#######.++......................+++++.................+++.....++......#####",
-    "###.++++++++++.#######.+++++++++++++++++++++++.+++++++++++++++++++++++++++.++++.......####",
+    "###.++++++++++.#######.+++++++++++T+++++++++++.+++++++++++++++++++++++++++.++++.......####",
     "###.++++++++++.........+++++++++++++++++++++...+++++++++++++++++++++++++....+.+.......####",
     "###.+++.....++.........+++....................+++++++.......................++........####",
-    "###.+++.###.++.#######.++.####################.+++++.###########..##########.++.......####",
-    "###.+++.....++.#######....#####################.+++.############..##########.+++++++++.###",
+    "###.+++.###.++.#######.++.####################.+++++.#######################.++.......####",
+    "###.+++.....++.#######....#####################.+++.########################.+++++++++.###",
     "###.+++........#..#####..###########........####.++.#######............#####.+++++++++.###",
     "###.++.##########.####...###########........####.++.#######............#####.+++++++++.###",
     "####...########..............#######........####.++.#######............#####.######...####",
@@ -116,7 +116,7 @@ ROOM_A_MAP = [
     "#...................#",
     "#...................#",
     "#...................#",
-    "#.........E.........#",  # E 타일 위치 예시 (10, 11)
+    "#.........P.........#",  # (10, 11) 위치에 발판
     "#####################",
 ]
 
@@ -155,25 +155,32 @@ class MapManager:
         self.rows = 0
         self.cols = 0
 
+        # 마지막으로 입장했던 HALL 쪽 입구 위치 (ROOM_A → HALL 복귀용)
+        self.last_entrance = None
+
         # 1. 각 맵의 입구 좌표들 (참고용/디버깅용)
         self.room_entrances = {
-            "HALL": [(5, 10), (20, 7)],
-            "ROOM_A": [(10, 11)],   # ROOM_A의 E가 있는 위치 예시
+            "HALL": [(63, 34), (64, 34), (63, 35), (64, 35)],
+            "ROOM_A": [(10, 11)],   # ROOM_A의 출구 발판 위치
         }
 
         # 2. 입구 ↔ 연결 방 정보
         # key: (현재_방_이름, (입구_타일_x, 입구_타일_y))
-        # value: (다음_방_이름, (다음_방에서의_타일_x, 타일_y))
+        # value: (다음_방_이름, (다음_방에서의_타일_x, 타일_y 또는 None))
         self.room_links = {
-            ("HALL", (5, 10)): ("ROOM_A", (10, 9)),
-            ("ROOM_A", (10, 11)): ("HALL", (5, 10)),
+            ("HALL", (63, 34)): ("ROOM_A", (10, 10)),
+            ("HALL", (64, 34)): ("ROOM_A", (10, 10)),
+            ("HALL", (63, 35)): ("ROOM_A", (10, 10)),
+            ("HALL", (64, 35)): ("ROOM_A", (10, 10)),
+
+            # ROOM_A의 발판 → HALL로 복귀 (타일 좌표는 None, last_entrance 사용)
+            ("ROOM_A", (10, 11)): ("HALL", (63, 33)),
         }
         
-        # 🔹 압력판 -> 열릴 문(타일 좌표들) 매핑 (예시 좌표)
+        # 🔹 압력판 -> 열릴 문(타일 좌표들) 매핑
         self.plate_doors = {
             # ("방이름", (압력판 타일 좌표)): [ (문 타일 x, y), (문 타일 x, y), ... ]
-            ("HALL", (30, 20)): [(40, 20), (40, 21)],      # 압력판 / 문 좌표 적기
-            # 나중에 필요할 때 더 추가
+            ("HALL", (52, 32)): [(63, 34), (64, 34), (63, 35), (64, 35)],
         }
 
     def load_room(self, name, tile_pos=None):
@@ -186,6 +193,12 @@ class MapManager:
         self.map_grid = [list(row) for row in data]
         self.rows = len(self.map_grid)
         self.cols = len(self.map_grid[0])
+
+        # HALL을 로드할 때, (52, 32)에 항상 압력판 'P'를 깔아 둔다.
+        if name == "HALL":
+            plate_x, plate_y = 52, 32
+            if 0 <= plate_y < self.rows and 0 <= plate_x < self.cols:
+                self.map_grid[plate_y][plate_x] = 'P'
 
         if tile_pos is None:
             start_col, start_row = self.rooms[name]["start_pos"]
@@ -237,13 +250,26 @@ class MapManager:
 
         if key in self.room_links:
             new_map, new_tile_pos = self.room_links[key]
-            new_tile_x, new_tile_y = new_tile_pos
+
+            # HALL → ROOM_A 로 들어갈 때, 입구 좌표 기억
+            if current_map == "HALL" and new_map == "ROOM_A":
+                self.last_entrance = (tile_x, tile_y)
+
+            # ROOM_A → HALL 로 나갈 때, last_entrance로 복귀
+            if new_map == "HALL" and new_tile_pos is None:
+                if self.last_entrance is not None:
+                    new_tile_x, new_tile_y = self.last_entrance
+                else:
+                    # 혹시 모를 안전장치: last_entrance가 없으면 원래 자리 유지
+                    new_tile_x, new_tile_y = tile_x, tile_y
+            else:
+                new_tile_x, new_tile_y = new_tile_pos
+
             # ★ 반드시 x, y 순서로 반환
             return new_map, new_tile_x, new_tile_y
 
         # 연결된 입구가 없으면 현재 값 유지
         return current_map, tile_x, tile_y
-    
     
     # 문열기 함수
     def open_doors_for_plate(self, tile_pos): 
@@ -260,6 +286,13 @@ class MapManager:
             if 0 <= door_y < self.rows and 0 <= door_x < self.cols:
                 # 여기서는 문을 '벽(#)'에서 '바닥(.)'으로 바꿔서 통과 가능하게 처리
                 self.map_grid[door_y][door_x] = '.'
+
+                # ROOMS 안의 원본 map_data도 같이 수정해서,
+                # 나중에 방을 다시 로드해도 문이 열린 상태를 유지
+                room_data = self.rooms[self.current_room]["map_data"]
+                row_str = room_data[door_y]
+                room_data[door_y] = row_str[:door_x] + '.' + row_str[door_x+1:]
+
                 print(f"[DEBUG] 문 개방: {self.current_room} ({door_x}, {door_y})")
 
 
@@ -274,11 +307,12 @@ COLOR_WALL = (35, 35, 40)
 COLOR_FLOOR = (80, 80, 85)
 COLOR_TORCH = (240, 190, 90)
 COLOR_DOOR = (120, 70, 40)
-COLOR_SWITCH = (160, 160, 160)
+COLOR_SWITCH = (200, 150, 60)   # 압력판(발판) 색을 주황빛으로 (살짝 변경)
 COLOR_SPIKE = (180, 50, 50)
 COLOR_VASE = (170, 120, 80)
 COLOR_PLAYER = (200, 220, 255)
 COLOR_PATH = (120, 120, 120)  # + 타일용
+COLOR_WEB = (180, 180, 220)   # 🕸 거미줄 타일 색
 
 # -------------------- 전역 상태 --------------------
 map_manager = MapManager(ROOMS)
@@ -293,7 +327,6 @@ player_state = {
     "keys": 0,         # 가지고 있는 열쇠 개수
     "slow_timer": 0,   # 느려진 상태가 지속되는 프레임 수 (예: 60 = 1초)
 }
-
 
 
 # -------------------- 카메라 --------------------
@@ -359,7 +392,7 @@ def draw_map(surface, cam_x, cam_y):
                 )
                 pygame.draw.rect(surface, COLOR_DOOR, door_rect)
 
-            elif cell == "E":  # 출구(시각용)
+            elif cell == "E":  # 출구(시각용) - 지금은 사용 안 하지만 남겨둠
                 door_rect = (
                     x + TILE_SIZE // 4,
                     y + TILE_SIZE // 4,
@@ -368,16 +401,16 @@ def draw_map(surface, cam_x, cam_y):
                 )
                 pygame.draw.rect(surface, (160, 120, 60), door_rect)
 
-            elif cell == "P":  # 압력판
+            elif cell == "P":  # 압력판(발판)
                 switch_rect = (
-                    x + TILE_SIZE // 4,
-                    y + TILE_SIZE // 4,
-                    TILE_SIZE // 2,
-                    TILE_SIZE // 2,
+                    x + TILE_SIZE // 8,
+                    y + TILE_SIZE // 8,
+                    TILE_SIZE * 3 // 4,
+                    TILE_SIZE * 3 // 4,
                 )
                 pygame.draw.rect(surface, COLOR_SWITCH, switch_rect)
 
-            elif cell == "S":  # 가시  -> 밟으면 느려짐
+            elif cell == "S":  # 가시  -> 밟으면 느려짐 (강한 슬로우)
                 p1 = (x + TILE_SIZE // 2, y + TILE_SIZE // 4)
                 p2 = (x + TILE_SIZE // 4, y + TILE_SIZE * 3 // 4)
                 p3 = (x + TILE_SIZE * 3 // 4, y + TILE_SIZE * 3 // 4)
@@ -393,6 +426,13 @@ def draw_map(surface, cam_x, cam_y):
 
             elif cell == "+":  # 길 강조
                 pygame.draw.rect(surface, COLOR_PATH, (x, y, TILE_SIZE, TILE_SIZE))
+
+            elif cell == "W":  # 🕸 거미줄 타일 (부드러운 슬로우)
+                # 바닥 위에 얇은 거미줄 느낌
+                pygame.draw.rect(surface, COLOR_WEB, (x + 4, y + 4, TILE_SIZE - 8, 2))
+                pygame.draw.rect(surface, COLOR_WEB, (x + 4, y + TILE_SIZE - 6, TILE_SIZE - 8, 2))
+                pygame.draw.rect(surface, COLOR_WEB, (x + 4, y + 4, 2, TILE_SIZE - 8))
+                pygame.draw.rect(surface, COLOR_WEB, (x + TILE_SIZE - 6, y + 4, 2, TILE_SIZE - 8))
             # '.' 은 바닥만 있으니 추가 없음
 
 
@@ -422,7 +462,7 @@ def draw_light(surface, cam_x, cam_y):
         light_radius,
     )
 
-    # 횃불 빛
+    # 횃불 빛 (조금 더 넓게 밝히기)
     for row_idx, row in enumerate(map_manager.map_grid):
         for col_idx, cell in enumerate(row):
             if cell == "T":
@@ -432,11 +472,11 @@ def draw_light(surface, cam_x, cam_y):
                     dark,
                     (0, 0, 0, 0),
                     (int(tx), int(ty)),
-                    TILE_SIZE * 1,
+                    TILE_SIZE * 2,   # 횃불 주변은 더 넓게 보이도록
                 )
 
     surface.blit(dark, (0, 0))
-    
+
 
 # “타일 효과”를 한 곳에서 처리하는 함수
 def handle_tile_effect(tile, col, row):
@@ -453,23 +493,38 @@ def handle_tile_effect(tile, col, row):
         map_manager.map_grid[row][col] = '.'
         print(f"[DEBUG] 열쇠 획득! 현재 열쇠 개수: {player_state['keys']}")
 
-    # 2) 가시 밟으면 느려짐
+    # 2) 가시 밟으면 느려짐 (강한 슬로우)
     elif tile == 'S':
-        # 예: 60프레임(1초) 동안 속도 반으로
-        player_state["slow_timer"] = 60
-        player_speed = BASE_PLAYER_SPEED // 2
-        print("[DEBUG] 가시에 닿았습니다. 잠시 느려집니다.")
+        # 예: 90프레임 동안 매우 느려짐
+        player_state["slow_timer"] = 90
+        player_speed = max(1, BASE_PLAYER_SPEED // 2)
+        print("[DEBUG] 가시에 닿았습니다. 크게 느려집니다.")
 
-    # 3) 압력판 밟으면 문 열림
+    # 3) 거미줄 밟으면 조금 느려짐 (부드러운 슬로우)
+    elif tile == 'W':
+        # 예: 45프레임 동안 약하게 슬로우
+        player_state["slow_timer"] = 45
+        # BASE_PLAYER_SPEED가 4라면 3 정도로
+        player_speed = max(1, BASE_PLAYER_SPEED - 1)
+        print("[DEBUG] 거미줄에 걸렸습니다. 움직임이 둔해집니다.")
+
+    # 4) 압력판 밟으면 문 열림
     elif tile == 'P':
         map_manager.open_doors_for_plate((col, row))
         print(f"[DEBUG] 압력판 발동! ({col}, {row})")
     
-    # 4) 그 외의 함정/트리거 (예: 'X'를 함정으로)
+    # 5) 그 외의 함정/트리거 (예: 'X'를 함정으로)
     elif tile == 'X':
         # 예: 데미지를 입거나, 다른 방으로 텔레포트 등
         # 나중에 구체적으로 설계 가능
         print("[DEBUG] 함정 발동! 아직 구체 로직은 미구현.")
+
+    # 6) 횃불 위에 올라가면, 느려진 상태 해제 (안전한 느낌)
+    elif tile == 'T':
+        if player_state["slow_timer"] > 0:
+            player_state["slow_timer"] = 0
+            player_speed = BASE_PLAYER_SPEED
+            print("[DEBUG] 횃불 근처에서 몸이 풀린 느낌입니다. 속도 정상 복귀.")
 
 
 # -------------------- 이동/충돌 --------------------
@@ -490,18 +545,16 @@ def move_player(dx, dy):
     player_pos[0] = new_x
     player_pos[1] = new_y
 
-    # ✅ 밟은 타일 효과 처리 (열쇠, 가시, 압력판 등)
+    # ✅ 밟은 타일 효과 처리 (열쇠, 가시, 거미줄, 압력판 등)
     handle_tile_effect(tile, col, row)
 
     # ✅ 방 입구인지 확인해서 방 전환 처리
     current_room_name = map_manager.current_room
-    next_room_name, next_tile_pos = map_manager.move_to_linked_room_if_needed((col, row))
+    next_room_name, next_tile_x, next_tile_y = map_manager.move_to_room((col, row), current_room_name)
 
     if next_room_name != current_room_name:
-        new_px, new_py = map_manager.load_room(next_room_name, tile_pos=next_tile_pos)
+        new_px, new_py = map_manager.load_room(next_room_name, tile_pos=(next_tile_x, next_tile_y))
         player_pos[0], player_pos[1] = new_px, new_py
-
-
 
 
 # -------------------- 메인 --------------------
@@ -511,15 +564,14 @@ player_pos[0], player_pos[1] = map_manager.load_room("HALL")
 running = True
 while running:
     dt = clock.tick(60)
-    
-        # 🔹 가시에 의한 슬로우 상태 갱신
+
+    # 🔹 가시/거미줄에 의한 슬로우 상태 갱신
     if player_state["slow_timer"] > 0:
         player_state["slow_timer"] -= 1
         if player_state["slow_timer"] <= 0:
             # 타이머가 끝나면 속도 원래대로
             player_speed = BASE_PLAYER_SPEED
             print("[DEBUG] 슬로우 상태 해제")
-
 
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
