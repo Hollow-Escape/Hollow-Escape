@@ -168,6 +168,13 @@ class MapManager:
             ("HALL", (5, 10)): ("ROOM_A", (10, 9)),
             ("ROOM_A", (10, 11)): ("HALL", (5, 10)),
         }
+        
+        # 🔹 압력판 -> 열릴 문(타일 좌표들) 매핑 (예시 좌표)
+        self.plate_doors = {
+            # ("방이름", (압력판 타일 좌표)): [ (문 타일 x, y), (문 타일 x, y), ... ]
+            ("HALL", (30, 20)): [(40, 20), (40, 21)],      # 압력판 / 문 좌표 적기
+            # 나중에 필요할 때 더 추가
+        }
 
     def load_room(self, name, tile_pos=None):
         """
@@ -236,6 +243,24 @@ class MapManager:
 
         # 연결된 입구가 없으면 현재 값 유지
         return current_map, tile_x, tile_y
+    
+    
+    # 문열기 함수
+    def open_doors_for_plate(self, tile_pos): 
+        """
+        현재 방에서 tile_pos 압력판을 밟았을 때,
+        연결된 문 타일들을 열어준다(벽을 바닥으로 변경).
+        """
+        key = (self.current_room, tile_pos)
+        if key not in self.plate_doors:
+            return
+
+        door_list = self.plate_doors[key]
+        for door_x, door_y in door_list:
+            if 0 <= door_y < self.rows and 0 <= door_x < self.cols:
+                # 여기서는 문을 '벽(#)'에서 '바닥(.)'으로 바꿔서 통과 가능하게 처리
+                self.map_grid[door_y][door_x] = '.'
+                print(f"[DEBUG] 문 개방: {self.current_room} ({door_x}, {door_y})")
 
 
 # -------------------- 화면/카메라 설정 --------------------
@@ -257,8 +282,18 @@ COLOR_PATH = (120, 120, 120)  # + 타일용
 
 # -------------------- 전역 상태 --------------------
 map_manager = MapManager(ROOMS)
-player_pos = [0, 0]          # 월드 좌표 (px)
-player_speed = 4
+
+BASE_PLAYER_SPEED = 4          # 기본 속도
+player_speed = BASE_PLAYER_SPEED
+
+player_pos = [0, 0]            # 월드 좌표 (px)
+
+# 플레이어 상태(열쇠 개수, 슬로우 타이머 등)
+player_state = {
+    "keys": 0,         # 가지고 있는 열쇠 개수
+    "slow_timer": 0,   # 느려진 상태가 지속되는 프레임 수 (예: 60 = 1초)
+}
+
 
 
 # -------------------- 카메라 --------------------
@@ -401,6 +436,40 @@ def draw_light(surface, cam_x, cam_y):
                 )
 
     surface.blit(dark, (0, 0))
+    
+
+# “타일 효과”를 한 곳에서 처리하는 함수
+def handle_tile_effect(tile, col, row):
+    """
+    플레이어가 (col, row) 위치의 tile을 밟았을 때
+    타일 종류에 따라 기믹을 처리하는 함수.
+    """
+    global player_speed
+
+    # 1) 열쇠 획득
+    if tile == 'K':
+        player_state["keys"] += 1
+        # 맵에서 열쇠를 제거 (이제 바닥이 됨)
+        map_manager.map_grid[row][col] = '.'
+        print(f"[DEBUG] 열쇠 획득! 현재 열쇠 개수: {player_state['keys']}")
+
+    # 2) 가시 밟으면 느려짐
+    elif tile == 'S':
+        # 예: 60프레임(1초) 동안 속도 반으로
+        player_state["slow_timer"] = 60
+        player_speed = BASE_PLAYER_SPEED // 2
+        print("[DEBUG] 가시에 닿았습니다. 잠시 느려집니다.")
+
+    # 3) 압력판 밟으면 문 열림
+    elif tile == 'P':
+        map_manager.open_doors_for_plate((col, row))
+        print(f"[DEBUG] 압력판 발동! ({col}, {row})")
+    
+    # 4) 그 외의 함정/트리거 (예: 'X'를 함정으로)
+    elif tile == 'X':
+        # 예: 데미지를 입거나, 다른 방으로 텔레포트 등
+        # 나중에 구체적으로 설계 가능
+        print("[DEBUG] 함정 발동! 아직 구체 로직은 미구현.")
 
 
 # -------------------- 이동/충돌 --------------------
@@ -413,7 +482,7 @@ def move_player(dx, dy):
 
     tile, col, row = map_manager.get_tile_info_at_pixel(new_x, new_y)
 
-    # 이동 가능 여부 체크 (현재 방 기준, 벽은 못 지나감)
+    # 이동 가능 여부 체크 (벽은 못 지나감)
     if not map_manager.is_walkable(col, row):
         return
 
@@ -421,19 +490,17 @@ def move_player(dx, dy):
     player_pos[0] = new_x
     player_pos[1] = new_y
 
-    # 👉 방 이동 처리 (새로 넣은 move_to_room 사용)
+    # ✅ 밟은 타일 효과 처리 (열쇠, 가시, 압력판 등)
+    handle_tile_effect(tile, col, row)
+
+    # ✅ 방 입구인지 확인해서 방 전환 처리
     current_room_name = map_manager.current_room
-    next_room_name, next_tile_x, next_tile_y = map_manager.move_to_room(
-        (col, row), current_room_name
-    )
+    next_room_name, next_tile_pos = map_manager.move_to_linked_room_if_needed((col, row))
 
     if next_room_name != current_room_name:
-        # 새 방 로드 + 플레이어 위치 재설정
-        new_px, new_py = map_manager.load_room(
-            next_room_name,
-            tile_pos=(next_tile_x, next_tile_y),
-        )
+        new_px, new_py = map_manager.load_room(next_room_name, tile_pos=next_tile_pos)
         player_pos[0], player_pos[1] = new_px, new_py
+
 
 
 
@@ -444,6 +511,15 @@ player_pos[0], player_pos[1] = map_manager.load_room("HALL")
 running = True
 while running:
     dt = clock.tick(60)
+    
+        # 🔹 가시에 의한 슬로우 상태 갱신
+    if player_state["slow_timer"] > 0:
+        player_state["slow_timer"] -= 1
+        if player_state["slow_timer"] <= 0:
+            # 타이머가 끝나면 속도 원래대로
+            player_speed = BASE_PLAYER_SPEED
+            print("[DEBUG] 슬로우 상태 해제")
+
 
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
